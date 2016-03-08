@@ -1,9 +1,10 @@
 //! HTTP RequestUris
+use std::fmt::{Display, self};
 use std::str::FromStr;
 use url::Url;
 use url::ParseError as UrlError;
 
-use error::HttpError;
+use Error;
 
 /// The Request-URI of a Request's StartLine.
 ///
@@ -50,24 +51,35 @@ pub enum RequestUri {
 }
 
 impl FromStr for RequestUri {
-    type Err = HttpError;
+    type Err = Error;
 
-    fn from_str(s: &str) -> Result<RequestUri, HttpError> {
+    fn from_str(s: &str) -> Result<RequestUri, Error> {
         let bytes = s.as_bytes();
         if bytes == [] {
-            Err(HttpError::HttpUriError(UrlError::InvalidCharacter))
+            Err(Error::Uri(UrlError::InvalidCharacter))
         } else if bytes == b"*" {
             Ok(RequestUri::Star)
         } else if bytes.starts_with(b"/") {
-            Ok(RequestUri::AbsolutePath(s.to_string()))
+            Ok(RequestUri::AbsolutePath(s.to_owned()))
         } else if bytes.contains(&b'/') {
             Ok(RequestUri::AbsoluteUri(try!(Url::parse(s))))
         } else {
-            let mut temp = "http://".to_string();
+            let mut temp = "http://".to_owned();
             temp.push_str(s);
             try!(Url::parse(&temp[..]));
             todo!("compare vs u.authority()");
-            Ok(RequestUri::Authority(s.to_string()))
+            Ok(RequestUri::Authority(s.to_owned()))
+        }
+    }
+}
+
+impl Display for RequestUri {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            RequestUri::AbsolutePath(ref path) => f.write_str(path),
+            RequestUri::AbsoluteUri(ref url) => write!(f, "{}", url),
+            RequestUri::Authority(ref path) => f.write_str(path),
+            RequestUri::Star => f.write_str("*")
         }
     }
 }
@@ -80,8 +92,19 @@ fn test_uri_fromstr() {
 
     read("*", RequestUri::Star);
     read("http://hyper.rs/", RequestUri::AbsoluteUri(Url::parse("http://hyper.rs/").unwrap()));
-    read("hyper.rs", RequestUri::Authority("hyper.rs".to_string()));
-    read("/", RequestUri::AbsolutePath("/".to_string()));
+    read("hyper.rs", RequestUri::Authority("hyper.rs".to_owned()));
+    read("/", RequestUri::AbsolutePath("/".to_owned()));
 }
 
+#[test]
+fn test_uri_display() {
+    fn assert_display(expected_string: &str, request_uri: RequestUri) {
+        assert_eq!(expected_string, format!("{}", request_uri));
+    }
 
+    assert_display("*", RequestUri::Star);
+    assert_display("http://hyper.rs/", RequestUri::AbsoluteUri(Url::parse("http://hyper.rs/").unwrap()));
+    assert_display("hyper.rs", RequestUri::Authority("hyper.rs".to_owned()));
+    assert_display("/", RequestUri::AbsolutePath("/".to_owned()));
+
+}

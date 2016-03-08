@@ -1,29 +1,42 @@
 header! {
-    #[doc="`User-Agent` header, defined in"]
-    #[doc="[RFC7231](http://tools.ietf.org/html/rfc7231#section-5.5.3)"]
-    #[doc=""]
-    #[doc="The `User-Agent` header field contains information about the user"]
-    #[doc="agent originating the request, which is often used by servers to help"]
-    #[doc="identify the scope of reported interoperability problems, to work"]
-    #[doc="around or tailor responses to avoid particular user agent"]
-    #[doc="limitations, and for analytics regarding browser or operating system"]
-    #[doc="use.  A user agent SHOULD send a User-Agent field in each request"]
-    #[doc="unless specifically configured not to do so."]
-    #[doc=""]
-    #[doc="# ABNF"]
-    #[doc="```plain"]
-    #[doc="User-Agent = product *( RWS ( product / comment ) )"]
-    #[doc="product         = token [\"/\" product-version]"]
-    #[doc="product-version = token"]
-    #[doc="```"]
-    // TODO: Maybe write parsing according to the spec? (Split the String)
+    /// `User-Agent` header, defined in
+    /// [RFC7231](http://tools.ietf.org/html/rfc7231#section-5.5.3)
+    ///
+    /// The `User-Agent` header field contains information about the user
+    /// agent originating the request, which is often used by servers to help
+    /// identify the scope of reported interoperability problems, to work
+    /// around or tailor responses to avoid particular user agent
+    /// limitations, and for analytics regarding browser or operating system
+    /// use.  A user agent SHOULD send a User-Agent field in each request
+    /// unless specifically configured not to do so.
+    ///
+    /// # ABNF
+    /// ```plain
+    /// User-Agent = product *( RWS ( product / comment ) )
+    /// product         = token ["/" product-version]
+    /// product-version = token
+    /// ```
+    ///
+    /// # Example values
+    /// * `CERN-LineMode/2.15 libwww/2.17b3`
+    /// * `Bunnies`
+    ///
+    /// # Notes
+    /// * The parser does not split the value
+    ///
+    /// # Example
+    /// ```
+    /// use hyper::header::{Headers, UserAgent};
+    ///
+    /// let mut headers = Headers::new();
+    /// headers.set(UserAgent("hyper/0.5.2".to_owned()));
+    /// ```
     (UserAgent, "User-Agent") => [String]
-}
 
-#[test] fn test_format() {
-    use std::borrow::ToOwned;
-    use header::Headers;
-    let mut head = Headers::new();
-    head.set(UserAgent("Bunnies".to_owned()));
-    assert!(head.to_string() == "User-Agent: Bunnies\r\n".to_owned());
+    test_user_agent {
+        // Testcase from RFC
+        test_header!(test1, vec![b"CERN-LineMode/2.15 libwww/2.17b3"]);
+        // Own testcase
+        test_header!(test2, vec![b"Bunnies"], Some(UserAgent("Bunnies".to_owned())));
+    }
 }

@@ -1,7 +1,7 @@
-#![doc(html_root_url = "https://hyperium.github.io/hyper/hyper/index.html")]
-#![deny(missing_docs)]
+#![doc(html_root_url = "https://hyperium.github.io/hyper/")]
+#![cfg_attr(test, deny(missing_docs))]
 #![cfg_attr(test, deny(warnings))]
-#![cfg_attr(test, feature(test))]
+#![cfg_attr(all(test, feature = "nightly"), feature(test))]
 
 //! # Hyper
 //!
@@ -9,8 +9,9 @@
 //! is a low-level typesafe abstraction over raw HTTP, providing an elegant
 //! layer over "stringly-typed" HTTP.
 //!
-//! Hyper offers both an HTTP/S client an HTTP server which can be used to drive
-//! complex web applications written entirely in Rust.
+//! Hyper offers both a [Client](client/index.html) and a
+//! [Server](server/index.html) which can be used to drive complex web
+//! applications written entirely in Rust.
 //!
 //! ## Internal Design
 //!
@@ -20,8 +21,8 @@
 //!
 //! ### Common Functionality
 //!
-//! Functionality and code shared between the Server and Client implementations can
-//! be found in `src` directly - this includes `NetworkStream`s, `Method`s,
+//! Functionality and code shared between the Server and Client implementations
+//! can be found in `src` directly - this includes `NetworkStream`s, `Method`s,
 //! `StatusCode`, and so on.
 //!
 //! #### Methods
@@ -38,7 +39,8 @@
 //!
 //! #### Headers
 //!
-//! Hyper's header representation is likely the most complex API exposed by Hyper.
+//! Hyper's [header](header/index.html) representation is likely the most
+//! complex API exposed by Hyper.
 //!
 //! Hyper's headers are an abstraction over an internal `HashMap` and provides a
 //! typesafe API for interacting with headers that does not rely on the use of
@@ -129,28 +131,38 @@
 extern crate rustc_serialize as serialize;
 extern crate time;
 extern crate url;
+#[cfg(feature = "openssl")]
 extern crate openssl;
+#[cfg(feature = "serde-serialization")]
+extern crate serde;
 extern crate cookie;
 extern crate unicase;
 extern crate httparse;
 extern crate num_cpus;
 extern crate traitobject;
 extern crate typeable;
+extern crate solicit;
+
+#[macro_use]
+extern crate language_tags;
+
+#[macro_use]
+extern crate mime as mime_crate;
 
 #[macro_use]
 extern crate log;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "nightly"))]
 extern crate test;
 
 
-pub use mimewrapper::mime;
 pub use url::Url;
 pub use client::Client;
-pub use error::{HttpResult, HttpError};
+pub use error::{Result, Error};
 pub use method::Method::{Get, Head, Post, Delete};
 pub use status::StatusCode::{Ok, BadRequest, NotFound};
 pub use server::Server;
+pub use language_tags::LanguageTag;
 
 macro_rules! todo(
     ($($arg:tt)*) => (if cfg!(not(ndebug)) {
@@ -182,14 +194,21 @@ pub mod status;
 pub mod uri;
 pub mod version;
 
-
-mod mimewrapper {
-    /// Re-exporting the mime crate, for convenience.
-    extern crate mime;
+/// Re-exporting the mime crate, for convenience.
+pub mod mime {
+    pub use mime_crate::*;
 }
 
 #[allow(unconditional_recursion)]
 fn _assert_send<T: Send>() {
+    _assert_send::<Client>();
     _assert_send::<client::Request<net::Fresh>>();
     _assert_send::<client::Response>();
+    _assert_send::<error::Error>();
+}
+
+#[allow(unconditional_recursion)]
+fn _assert_sync<T: Sync>() {
+    _assert_sync::<Client>();
+    _assert_sync::<error::Error>();
 }

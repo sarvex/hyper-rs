@@ -1,36 +1,76 @@
 use method::Method;
 
 header! {
-    #[doc="`Allow` header, defined in [RFC7231](http://tools.ietf.org/html/rfc7231#section-7.4.1)"]
-    #[doc=""]
-    #[doc="The `Allow` header field lists the set of methods advertised as"]
-    #[doc="supported by the target resource.  The purpose of this field is"]
-    #[doc="strictly to inform the recipient of valid request methods associated"]
-    #[doc="with the resource."]
-    #[doc=""]
-    #[doc="# ABNF"]
-    #[doc="```plain"]
-    #[doc="Allow = #method"]
-    #[doc="```"]
+    /// `Allow` header, defined in [RFC7231](http://tools.ietf.org/html/rfc7231#section-7.4.1)
+    ///
+    /// The `Allow` header field lists the set of methods advertised as
+    /// supported by the target resource.  The purpose of this field is
+    /// strictly to inform the recipient of valid request methods associated
+    /// with the resource.
+    ///
+    /// # ABNF
+    /// ```plain
+    /// Allow = #method
+    /// ```
+    ///
+    /// # Example values
+    /// * `GET, HEAD, PUT`
+    /// * `OPTIONS, GET, PUT, POST, DELETE, HEAD, TRACE, CONNECT, PATCH, fOObAr`
+    /// * ``
+    ///
+    /// # Examples
+    /// ```
+    /// use hyper::header::{Headers, Allow};
+    /// use hyper::method::Method;
+    ///
+    /// let mut headers = Headers::new();
+    /// headers.set(
+    ///     Allow(vec![Method::Get])
+    /// );
+    /// ```
+    /// ```
+    /// use hyper::header::{Headers, Allow};
+    /// use hyper::method::Method;
+    ///
+    /// let mut headers = Headers::new();
+    /// headers.set(
+    ///     Allow(vec![
+    ///         Method::Get,
+    ///         Method::Post,
+    ///         Method::Patch,
+    ///         Method::Extension("COPY".to_owned()),
+    ///     ])
+    /// );
+    /// ```
     (Allow, "Allow") => (Method)*
-}
 
-#[cfg(test)]
-mod tests {
-    use super::Allow;
-    use header::Header;
-    use method::Method::{self, Options, Get, Put, Post, Delete, Head, Trace, Connect, Patch, Extension};
-
-    #[test]
-    fn test_allow() {
-        let mut allow: Option<Allow>;
-
-        allow = Header::parse_header([b"OPTIONS,GET,PUT,POST,DELETE,HEAD,TRACE,CONNECT,PATCH,fOObAr".to_vec()].as_ref());
-        assert_eq!(allow, Some(Allow(vec![Options, Get, Put, Post, Delete, Head, Trace, Connect, Patch, Extension("fOObAr".to_string())])));
-
-        allow = Header::parse_header([b"".to_vec()].as_ref());
-        assert_eq!(allow, Some(Allow(Vec::<Method>::new())));
+    test_allow {
+        // From the RFC
+        test_header!(
+            test1,
+            vec![b"GET, HEAD, PUT"],
+            Some(HeaderField(vec![Method::Get, Method::Head, Method::Put])));
+        // Own tests
+        test_header!(
+            test2,
+            vec![b"OPTIONS, GET, PUT, POST, DELETE, HEAD, TRACE, CONNECT, PATCH, fOObAr"],
+            Some(HeaderField(vec![
+                Method::Options,
+                Method::Get,
+                Method::Put,
+                Method::Post,
+                Method::Delete,
+                Method::Head,
+                Method::Trace,
+                Method::Connect,
+                Method::Patch,
+                Method::Extension("fOObAr".to_owned())])));
+        test_header!(
+            test3,
+            vec![b""],
+            Some(HeaderField(Vec::<Method>::new())));
     }
 }
 
-bench_header!(bench, Allow, { vec![b"OPTIONS,GET,PUT,POST,DELETE,HEAD,TRACE,CONNECT,PATCH,fOObAr".to_vec()] });
+bench_header!(bench,
+    Allow, { vec![b"OPTIONS,GET,PUT,POST,DELETE,HEAD,TRACE,CONNECT,PATCH,fOObAr".to_vec()] });

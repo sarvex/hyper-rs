@@ -1,5 +1,5 @@
 #![deny(warnings)]
-#![feature(collections, test)]
+#![feature(test)]
 extern crate hyper;
 
 extern crate test;
@@ -7,6 +7,7 @@ extern crate test;
 use std::fmt;
 use std::io::{self, Read, Write, Cursor};
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use hyper::net;
 
@@ -20,7 +21,7 @@ impl MockStream {
     fn new() -> MockStream {
         let head = b"HTTP/1.1 200 OK\r\nServer: Mock\r\n\r\n";
         let mut res = head.to_vec();
-        res.push_all(README);
+        res.extend_from_slice(README);
         MockStream {
             read: Cursor::new(res)
         }
@@ -58,8 +59,8 @@ impl hyper::header::Header for Foo {
     fn header_name() -> &'static str {
         "x-foo"
     }
-    fn parse_header(_: &[Vec<u8>]) -> Option<Foo> {
-        None
+    fn parse_header(_: &[Vec<u8>]) -> hyper::Result<Foo> {
+        Err(hyper::Error::Header)
     }
 }
 
@@ -73,16 +74,23 @@ impl net::NetworkStream for MockStream {
     fn peer_addr(&mut self) -> io::Result<SocketAddr> {
         Ok("127.0.0.1:1337".parse().unwrap())
     }
+    fn set_read_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+        // can't time out
+        Ok(())
+    }
+    fn set_write_timeout(&self, _: Option<Duration>) -> io::Result<()> {
+        // can't time out
+        Ok(())
+    }
 }
 
 struct MockConnector;
 
 impl net::NetworkConnector for MockConnector {
     type Stream = MockStream;
-    fn connect(&mut self, _: &str, _: u16, _: &str) -> io::Result<MockStream> {
+    fn connect(&self, _: &str, _: u16, _: &str) -> hyper::Result<MockStream> {
         Ok(MockStream::new())
     }
-
 }
 
 #[bench]
@@ -90,7 +98,7 @@ fn bench_mock_hyper(b: &mut test::Bencher) {
     let url = "http://127.0.0.1:1337/";
     b.iter(|| {
         let mut req = hyper::client::Request::with_connector(
-            hyper::Get, hyper::Url::parse(url).unwrap(), &mut MockConnector
+            hyper::Get, hyper::Url::parse(url).unwrap(), &MockConnector
         ).unwrap();
         req.headers_mut().set(Foo);
 
@@ -101,4 +109,3 @@ fn bench_mock_hyper(b: &mut test::Bencher) {
             .read_to_string(&mut s).unwrap()
     });
 }
-

@@ -1,10 +1,14 @@
 //! The HTTP request method
 use std::fmt;
 use std::str::FromStr;
+use std::convert::AsRef;
 
-use error::HttpError;
+use error::Error;
 use self::Method::{Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch,
                    Extension};
+
+#[cfg(feature = "serde-serialization")]
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// The Request Method (VERB)
 ///
@@ -34,8 +38,25 @@ pub enum Method {
     Connect,
     /// PATCH
     Patch,
-    /// Method extentions. An example would be `let m = Extension("FOO".to_string())`.
+    /// Method extensions. An example would be `let m = Extension("FOO".to_string())`.
     Extension(String)
+}
+
+impl AsRef<str> for Method {
+    fn as_ref(&self) -> &str {
+        match *self {
+            Options => "OPTIONS",
+            Get => "GET",
+            Post => "POST",
+            Put => "PUT",
+            Delete => "DELETE",
+            Head => "HEAD",
+            Trace => "TRACE",
+            Connect => "CONNECT",
+            Patch => "PATCH",
+            Extension(ref s) => s.as_ref()
+        }
+    }
 }
 
 impl Method {
@@ -69,10 +90,10 @@ impl Method {
 }
 
 impl FromStr for Method {
-    type Err = HttpError;
-    fn from_str(s: &str) -> Result<Method, HttpError> {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Method, Error> {
         if s == "" {
-            Err(HttpError::HttpMethodError)
+            Err(Error::Method)
         } else {
             Ok(match s {
                 "OPTIONS" => Options,
@@ -84,7 +105,7 @@ impl FromStr for Method {
                 "TRACE" => Trace,
                 "CONNECT" => Connect,
                 "PATCH" => Patch,
-                _ => Extension(s.to_string())
+                _ => Extension(s.to_owned())
             })
         }
     }
@@ -107,10 +128,26 @@ impl fmt::Display for Method {
     }
 }
 
+#[cfg(feature = "serde-serialization")]
+impl Serialize for Method {
+    fn serialize<S>(&self, serializer: &mut S) -> Result<(), S::Error> where S: Serializer {
+        format!("{}", self).serialize(serializer)
+    }
+}
+
+#[cfg(feature = "serde-serialization")]
+impl Deserialize for Method {
+    fn deserialize<D>(deserializer: &mut D) -> Result<Method, D::Error> where D: Deserializer {
+        let string_representation: String = try!(Deserialize::deserialize(deserializer));
+        Ok(FromStr::from_str(&string_representation[..]).unwrap())
+    }
+} 
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
+    use error::Error;
     use super::Method;
     use super::Method::{Get, Post, Put, Extension};
 
@@ -130,15 +167,20 @@ mod tests {
     #[test]
     fn test_from_str() {
         assert_eq!(Get, FromStr::from_str("GET").unwrap());
-        assert_eq!(Extension("MOVE".to_string()),
+        assert_eq!(Extension("MOVE".to_owned()),
                    FromStr::from_str("MOVE").unwrap());
+        let x: Result<Method, _> = FromStr::from_str("");
+        if let Err(Error::Method) = x {
+        } else {
+            panic!("An empty method is invalid!")
+        }
     }
 
     #[test]
     fn test_fmt() {
-        assert_eq!("GET".to_string(), format!("{}", Get));
-        assert_eq!("MOVE".to_string(),
-                   format!("{}", Extension("MOVE".to_string())));
+        assert_eq!("GET".to_owned(), format!("{}", Get));
+        assert_eq!("MOVE".to_owned(),
+                   format!("{}", Extension("MOVE".to_owned())));
     }
 
     #[test]
@@ -146,5 +188,13 @@ mod tests {
         let mut counter: HashMap<Method,usize> = HashMap::new();
         counter.insert(Get, 1);
         assert_eq!(Some(&1), counter.get(&Get));
+    }
+
+    #[test]
+    fn test_as_str() {
+        assert_eq!(Get.as_ref(), "GET");
+        assert_eq!(Post.as_ref(), "POST");
+        assert_eq!(Put.as_ref(), "PUT");
+        assert_eq!(Extension("MOVE".to_owned()).as_ref(), "MOVE");
     }
 }

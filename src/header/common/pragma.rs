@@ -16,6 +16,20 @@ use header::{Header, HeaderFormat, parsing};
 /// > specification deprecates such extensions to improve interoperability.
 ///
 /// Spec: https://tools.ietf.org/html/rfc7234#section-5.4
+///
+/// # Examples
+/// ```
+/// use hyper::header::{Headers, Pragma};
+///
+/// let mut headers = Headers::new();
+/// headers.set(Pragma::NoCache);
+/// ```
+/// ```
+/// use hyper::header::{Headers, Pragma};
+///
+/// let mut headers = Headers::new();
+/// headers.set(Pragma::Ext("foobar".to_owned()));
+/// ```
 #[derive(Clone, PartialEq, Debug)]
 pub enum Pragma {
     /// Corresponds to the `no-cache` value.
@@ -29,13 +43,12 @@ impl Header for Pragma {
         "Pragma"
     }
 
-    fn parse_header(raw: &[Vec<u8>]) -> Option<Pragma> {
+    fn parse_header(raw: &[Vec<u8>]) -> ::Result<Pragma> {
         parsing::from_one_raw_str(raw).and_then(|s: String| {
             let slice = &s.to_ascii_lowercase()[..];
             match slice {
-                "" => None,
-                "no-cache" => Some(Pragma::NoCache),
-                _ => Some(Pragma::Ext(s)),
+                "no-cache" => Ok(Pragma::NoCache),
+                _ => Ok(Pragma::Ext(s)),
             }
         })
     }
@@ -43,10 +56,10 @@ impl Header for Pragma {
 
 impl HeaderFormat for Pragma {
     fn fmt_header(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Pragma::NoCache => write!(f, "no-cache"),
-            Pragma::Ext(ref string) => write!(f, "{}", string),
-        }
+        f.write_str(match *self {
+            Pragma::NoCache => "no-cache",
+            Pragma::Ext(ref string) => &string[..],
+        })
     }
 }
 
@@ -56,6 +69,8 @@ fn test_parse_header() {
     let b = Pragma::NoCache;
     assert_eq!(a, b);
     let c: Pragma = Header::parse_header([b"FoObar".to_vec()].as_ref()).unwrap();
-    let d = Pragma::Ext("FoObar".to_string());
+    let d = Pragma::Ext("FoObar".to_owned());
     assert_eq!(c, d);
+    let e: ::Result<Pragma> = Header::parse_header([b"".to_vec()].as_ref());
+    assert_eq!(e.ok(), None);
 }

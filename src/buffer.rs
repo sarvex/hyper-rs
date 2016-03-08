@@ -1,5 +1,4 @@
 use std::cmp;
-use std::iter;
 use std::io::{self, Read, BufRead};
 
 pub struct BufReader<R> {
@@ -20,11 +19,9 @@ impl<R: Read> BufReader<R> {
 
     #[inline]
     pub fn with_capacity(rdr: R, cap: usize) -> BufReader<R> {
-        let mut buf = Vec::with_capacity(cap);
-        buf.extend(iter::repeat(0).take(cap));
         BufReader {
             inner: rdr,
-            buf: buf,
+            buf: vec![0; cap],
             pos: 0,
             cap: 0,
         }
@@ -39,9 +36,10 @@ impl<R: Read> BufReader<R> {
     #[inline]
     pub fn get_buf(&self) -> &[u8] {
         if self.pos < self.cap {
-            debug!("slicing {:?}", (self.pos, self.cap, self.buf.len()));
+            trace!("get_buf [u8; {}][{}..{}]", self.buf.len(), self.pos, self.cap);
             &self.buf[self.pos..self.cap]
         } else {
+            trace!("get_buf []");
             &[]
         }
     }
@@ -53,11 +51,13 @@ impl<R: Read> BufReader<R> {
     pub fn read_into_buf(&mut self) -> io::Result<usize> {
         self.maybe_reserve();
         let v = &mut self.buf;
+        trace!("read_into_buf buf[{}..{}]", self.cap, v.len());
         if self.cap < v.capacity() {
             let nread = try!(self.inner.read(&mut v[self.cap..]));
             self.cap += nread;
             Ok(nread)
         } else {
+            trace!("read_into_buf at full capacity");
             Ok(0)
         }
     }
@@ -65,12 +65,21 @@ impl<R: Read> BufReader<R> {
     #[inline]
     fn maybe_reserve(&mut self) {
         let cap = self.buf.capacity();
-        if self.cap == cap {
+        if self.cap == cap && cap < MAX_BUFFER_SIZE {
             self.buf.reserve(cmp::min(cap * 4, MAX_BUFFER_SIZE) - cap);
             let new = self.buf.capacity() - self.buf.len();
-            self.buf.extend(iter::repeat(0).take(new));
+            trace!("reserved {}", new);
+            unsafe { grow_zerofill(&mut self.buf, new) }
         }
     }
+}
+
+#[inline]
+unsafe fn grow_zerofill(buf: &mut Vec<u8>, additional: usize) {
+    use std::ptr;
+    let len = buf.len();
+    buf.set_len(len + additional);
+    ptr::write_bytes(buf.as_mut_ptr().offset(len as isize), 0, additional);
 }
 
 impl<R: Read> Read for BufReader<R> {
@@ -141,5 +150,15 @@ mod tests {
         assert_eq!(rdr.get_buf(), b"");
         assert_eq!(rdr.pos, 0);
         assert_eq!(rdr.cap, 0);
+    }
+
+    #[test]
+    fn test_resize() {
+        let raw = b"hello world";
+        let mut rdr = BufReader::with_capacity(&raw[..], 5);
+        rdr.read_into_buf().unwrap();
+        assert_eq!(rdr.get_buf(), b"hello");
+        rdr.read_into_buf().unwrap();
+        assert_eq!(rdr.get_buf(), b"hello world");
     }
 }

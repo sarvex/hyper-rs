@@ -5,21 +5,62 @@
 //! The `Client` API is designed for most people to make HTTP requests.
 //! It utilizes the lower level `Request` API.
 //!
+//! ## GET
+//!
 //! ```no_run
-//! use hyper::Client;
+//! # use hyper::Client;
+//! let client = Client::new();
 //!
-//! let mut client = Client::new();
-//!
-//! let mut res = client.get("http://example.domain").send().unwrap();
+//! let res = client.get("http://example.domain").send().unwrap();
 //! assert_eq!(res.status, hyper::Ok);
 //! ```
 //!
-//! The returned value from is a `Response`, which provides easy access
-//! to the `status`, the `headers`, and the response body via the `Writer`
+//! The returned value is a `Response`, which provides easy access to
+//! the `status`, the `headers`, and the response body via the `Read`
 //! trait.
+//!
+//! ## POST
+//!
+//! ```no_run
+//! # use hyper::Client;
+//! let client = Client::new();
+//!
+//! let res = client.post("http://example.domain")
+//!     .body("foo=bar")
+//!     .send()
+//!     .unwrap();
+//! assert_eq!(res.status, hyper::Ok);
+//! ```
+//!
+//! # Sync
+//!
+//! The `Client` implements `Sync`, so you can share it among multiple threads
+//! and make multiple requests simultaneously.
+//!
+//! ```no_run
+//! # use hyper::Client;
+//! use std::sync::Arc;
+//! use std::thread;
+//!
+//! // Note: an Arc is used here because `thread::spawn` creates threads that
+//! // can outlive the main thread, so we must use reference counting to keep
+//! // the Client alive long enough. Scoped threads could skip the Arc.
+//! let client = Arc::new(Client::new());
+//! let clone1 = client.clone();
+//! let clone2 = client.clone();
+//! thread::spawn(move || {
+//!     clone1.get("http://example.domain").send().unwrap();
+//! });
+//! thread::spawn(move || {
+//!     clone2.post("http://example.domain/post").body("foo=bar").send().unwrap();
+//! });
+//! ```
 use std::default::Default;
 use std::io::{self, copy, Read};
 use std::iter::Extend;
+use std::fmt;
+
+use std::time::Duration;
 
 use url::UrlParser;
 use url::ParseError as UrlError;
@@ -27,46 +68,66 @@ use url::ParseError as UrlError;
 use header::{Headers, Header, HeaderFormat};
 use header::{ContentLength, Location};
 use method::Method;
-use net::{NetworkConnector, HttpConnector, ContextVerifier};
-use status::StatusClass::Redirection;
-use {Url, HttpResult};
-use HttpError::HttpUriError;
+use net::{NetworkConnector, NetworkStream};
+use {Url};
+use Error;
 
+pub use self::pool::Pool;
 pub use self::request::Request;
 pub use self::response::Response;
 
+pub mod pool;
 pub mod request;
 pub mod response;
 
+use http::Protocol;
+use http::h1::Http11Protocol;
+
 /// A Client to use additional features with Requests.
 ///
-/// Clients can handle things such as: redirect policy.
-pub struct Client<C> {
-    connector: C,
+/// Clients can handle things such as: redirect policy, connection pooling.
+pub struct Client {
+    protocol: Box<Protocol + Send + Sync>,
     redirect_policy: RedirectPolicy,
+    read_timeout: Option<Duration>,
+    write_timeout: Option<Duration>,
 }
 
-impl<'v> Client<HttpConnector<'v>> {
+impl fmt::Debug for Client {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        fmt.debug_struct("Client")
+           .field("redirect_policy", &self.redirect_policy)
+           .field("read_timeout", &self.read_timeout)
+           .field("write_timeout", &self.write_timeout)
+           .finish()
+    }
+}
+
+impl Client {
 
     /// Create a new Client.
-    pub fn new() -> Client<HttpConnector<'v>> {
-        Client::with_connector(HttpConnector(None))
+    pub fn new() -> Client {
+        Client::with_pool_config(Default::default())
     }
 
-    /// Set the SSL verifier callback for use with OpenSSL.
-    pub fn set_ssl_verifier(&mut self, verifier: ContextVerifier<'v>) {
-        self.connector = HttpConnector(Some(verifier));
+    /// Create a new Client with a configured Pool Config.
+    pub fn with_pool_config(config: pool::Config) -> Client {
+        Client::with_connector(Pool::new(config))
     }
-
-}
-
-impl<C: NetworkConnector> Client<C> {
 
     /// Create a new client with a specific connector.
-    pub fn with_connector(connector: C) -> Client<C> {
+    pub fn with_connector<C, S>(connector: C) -> Client
+    where C: NetworkConnector<Stream=S> + Send + Sync + 'static, S: NetworkStream + Send {
+        Client::with_protocol(Http11Protocol::with_connector(connector))
+    }
+
+    /// Create a new client with a specific `Protocol`.
+    pub fn with_protocol<P: Protocol + Send + Sync + 'static>(protocol: P) -> Client {
         Client {
-            connector: connector,
-            redirect_policy: Default::default()
+            protocol: Box::new(protocol),
+            redirect_policy: Default::default(),
+            read_timeout: None,
+            write_timeout: None,
         }
     }
 
@@ -75,72 +136,100 @@ impl<C: NetworkConnector> Client<C> {
         self.redirect_policy = policy;
     }
 
+    /// Set the read timeout value for all requests.
+    pub fn set_read_timeout(&mut self, dur: Option<Duration>) {
+        self.read_timeout = dur;
+    }
+
+    /// Set the write timeout value for all requests.
+    pub fn set_write_timeout(&mut self, dur: Option<Duration>) {
+        self.write_timeout = dur;
+    }
+
     /// Build a Get request.
-    pub fn get<U: IntoUrl>(&mut self, url: U) -> RequestBuilder<U, C> {
+    pub fn get<U: IntoUrl>(&self, url: U) -> RequestBuilder {
         self.request(Method::Get, url)
     }
 
     /// Build a Head request.
-    pub fn head<U: IntoUrl>(&mut self, url: U) -> RequestBuilder<U, C> {
+    pub fn head<U: IntoUrl>(&self, url: U) -> RequestBuilder {
         self.request(Method::Head, url)
     }
 
+    /// Build a Patch request.
+    pub fn patch<U: IntoUrl>(&self, url: U) -> RequestBuilder {
+        self.request(Method::Patch, url)
+    }
+
     /// Build a Post request.
-    pub fn post<U: IntoUrl>(&mut self, url: U) -> RequestBuilder<U, C> {
+    pub fn post<U: IntoUrl>(&self, url: U) -> RequestBuilder {
         self.request(Method::Post, url)
     }
 
     /// Build a Put request.
-    pub fn put<U: IntoUrl>(&mut self, url: U) -> RequestBuilder<U, C> {
+    pub fn put<U: IntoUrl>(&self, url: U) -> RequestBuilder {
         self.request(Method::Put, url)
     }
 
     /// Build a Delete request.
-    pub fn delete<U: IntoUrl>(&mut self, url: U) -> RequestBuilder<U, C> {
+    pub fn delete<U: IntoUrl>(&self, url: U) -> RequestBuilder {
         self.request(Method::Delete, url)
     }
 
 
     /// Build a new request using this Client.
-    pub fn request<U: IntoUrl>(&mut self, method: Method, url: U) -> RequestBuilder<U, C> {
+    pub fn request<U: IntoUrl>(&self, method: Method, url: U) -> RequestBuilder {
         RequestBuilder {
             client: self,
             method: method,
-            url: url,
+            url: url.into_url(),
             body: None,
             headers: None,
         }
     }
 }
 
+impl Default for Client {
+    fn default() -> Client { Client::new() }
+}
+
 /// Options for an individual Request.
 ///
 /// One of these will be built for you if you use one of the convenience
 /// methods, such as `get()`, `post()`, etc.
-pub struct RequestBuilder<'a, U: IntoUrl, C: NetworkConnector + 'a> {
-    client: &'a mut Client<C>,
-    url: U,
+pub struct RequestBuilder<'a> {
+    client: &'a Client,
+    // We store a result here because it's good to keep RequestBuilder
+    // from being generic, but it is a nicer API to report the error
+    // from `send` (when other errors may be happening, so it already
+    // returns a `Result`). Why's it good to keep it non-generic? It
+    // stops downstream crates having to remonomorphise and recompile
+    // the code, which can take a while, since `send` is fairly large.
+    // (For an extreme example, a tiny crate containing
+    // `hyper::Client::new().get("x").send().unwrap();` took ~4s to
+    // compile with a generic RequestBuilder, but 2s with this scheme,)
+    url: Result<Url, UrlError>,
     headers: Option<Headers>,
     method: Method,
     body: Option<Body<'a>>,
 }
 
-impl<'a, U: IntoUrl, C: NetworkConnector> RequestBuilder<'a, U, C> {
+impl<'a> RequestBuilder<'a> {
 
     /// Set a request body to be sent.
-    pub fn body<B: IntoBody<'a>>(mut self, body: B) -> RequestBuilder<'a, U, C> {
-        self.body = Some(body.into_body());
+    pub fn body<B: Into<Body<'a>>>(mut self, body: B) -> RequestBuilder<'a> {
+        self.body = Some(body.into());
         self
     }
 
     /// Add additional headers to the request.
-    pub fn headers(mut self, headers: Headers) -> RequestBuilder<'a, U, C> {
+    pub fn headers(mut self, headers: Headers) -> RequestBuilder<'a> {
         self.headers = Some(headers);
         self
     }
 
     /// Add an individual new header to the request.
-    pub fn header<H: Header + HeaderFormat>(mut self, header: H) -> RequestBuilder<'a, U, C> {
+    pub fn header<H: Header + HeaderFormat>(mut self, header: H) -> RequestBuilder<'a> {
         {
             let mut headers = match self.headers {
                 Some(ref mut h) => h,
@@ -156,28 +245,35 @@ impl<'a, U: IntoUrl, C: NetworkConnector> RequestBuilder<'a, U, C> {
     }
 
     /// Execute this request and receive a Response back.
-    pub fn send(self) -> HttpResult<Response> {
+    pub fn send(self) -> ::Result<Response> {
         let RequestBuilder { client, method, url, headers, body } = self;
-        let mut url = try!(url.into_url());
-        debug!("client.request {:?} {:?}", method, url);
+        let mut url = try!(url);
+        trace!("send {:?} {:?}", method, url);
 
-        let can_have_body = match &method {
-            &Method::Get | &Method::Head => false,
+        let can_have_body = match method {
+            Method::Get | Method::Head => false,
             _ => true
         };
 
         let mut body = if can_have_body {
-            body.map(|b| b.into_body())
+            body
         } else {
-             None
+            None
         };
 
         loop {
-            let mut req = try!(Request::with_connector(method.clone(), url.clone(), &mut client.connector));
+            let message = {
+                let (host, port) = try!(get_host_and_port(&url));
+                try!(client.protocol.new_message(&host, port, &*url.scheme))
+            };
+            let mut req = try!(Request::with_message(method.clone(), url.clone(), message));
             headers.as_ref().map(|headers| req.headers_mut().extend(headers.iter()));
 
+            try!(req.set_write_timeout(client.write_timeout));
+            try!(req.set_read_timeout(client.read_timeout));
+
             match (can_have_body, body.as_ref()) {
-                (true, Some(ref body)) => match body.size() {
+                (true, Some(body)) => match body.size() {
                     Some(size) => req.headers_mut().set(ContentLength(size)),
                     None => (), // chunked, Request will add it automatically
                 },
@@ -187,10 +283,10 @@ impl<'a, U: IntoUrl, C: NetworkConnector> RequestBuilder<'a, U, C> {
             let mut streaming = try!(req.start());
             body.take().map(|mut rdr| copy(&mut rdr, &mut streaming));
             let res = try!(streaming.send());
-            if res.status.class() != Redirection {
+            if !res.status.is_redirection() {
                 return Ok(res)
             }
-            debug!("redirect code {:?} for {:?}", res.status, url);
+            debug!("redirect code {:?} for {}", res.status, url);
 
             let loc = {
                 // punching borrowck here
@@ -210,16 +306,14 @@ impl<'a, U: IntoUrl, C: NetworkConnector> RequestBuilder<'a, U, C> {
                 }
             };
             url = match loc {
-                Ok(u) => {
-                    inspect!("Location", u)
-                },
+                Ok(u) => u,
                 Err(e) => {
                     debug!("Location header had invalid URI: {:?}", e);
                     return Ok(res);
                 }
             };
             match client.redirect_policy {
-                // separate branches because they cant be one
+                // separate branches because they can't be one
                 RedirectPolicy::FollowAll => (), //continue
                 RedirectPolicy::FollowIf(cond) if cond(&url) => (), //continue
                 _ => return Ok(res),
@@ -228,13 +322,7 @@ impl<'a, U: IntoUrl, C: NetworkConnector> RequestBuilder<'a, U, C> {
     }
 }
 
-/// A helper trait to allow overloading of the body parameter.
-pub trait IntoBody<'a> {
-    /// Consumes self into an instance of `Body`.
-    fn into_body(self) -> Body<'a>;
-}
-
-/// The target enum for the IntoBody trait.
+/// An enum of possible body types for a Request.
 pub enum Body<'a> {
     /// A Reader does not necessarily know it's size, so it is chunked.
     ChunkedBody(&'a mut (Read + 'a)),
@@ -265,32 +353,31 @@ impl<'a> Read for Body<'a> {
     }
 }
 
-// To allow someone to pass a `Body::SizedBody()` themselves.
-impl<'a> IntoBody<'a> for Body<'a> {
+impl<'a> Into<Body<'a>> for &'a [u8] {
     #[inline]
-    fn into_body(self) -> Body<'a> {
-        self
-    }
-}
-
-impl<'a> IntoBody<'a> for &'a [u8] {
-    #[inline]
-    fn into_body(self) -> Body<'a> {
+    fn into(self) -> Body<'a> {
         Body::BufBody(self, self.len())
     }
 }
 
-impl<'a> IntoBody<'a> for &'a str {
+impl<'a> Into<Body<'a>> for &'a str {
     #[inline]
-    fn into_body(self) -> Body<'a> {
-        self.as_bytes().into_body()
+    fn into(self) -> Body<'a> {
+        self.as_bytes().into()
     }
 }
 
-impl<'a, R: Read> IntoBody<'a> for &'a mut R {
+impl<'a> Into<Body<'a>> for &'a String {
     #[inline]
-    fn into_body(self) -> Body<'a> {
-        Body::ChunkedBody(self)
+    fn into(self) -> Body<'a> {
+        self.as_bytes().into()
+    }
+}
+
+impl<'a, R: Read> From<&'a mut R> for Body<'a> {
+    #[inline]
+    fn from(r: &'a mut R) -> Body<'a> {
+        Body::ChunkedBody(r)
     }
 }
 
@@ -312,6 +399,12 @@ impl<'a> IntoUrl for &'a str {
     }
 }
 
+impl<'a> IntoUrl for &'a String {
+    fn into_url(self) -> Result<Url, UrlError> {
+        Url::parse(self)
+    }
+}
+
 /// Behavior regarding how to handle redirects within a Client.
 #[derive(Copy)]
 pub enum RedirectPolicy {
@@ -323,10 +416,20 @@ pub enum RedirectPolicy {
     FollowIf(fn(&Url) -> bool),
 }
 
-// This is a hack because of upstream typesystem issues. 
+impl fmt::Debug for RedirectPolicy {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            RedirectPolicy::FollowNone => fmt.write_str("FollowNone"),
+            RedirectPolicy::FollowAll => fmt.write_str("FollowAll"),
+            RedirectPolicy::FollowIf(_) => fmt.write_str("FollowIf"),
+        }
+    }
+}
+
+// This is a hack because of upstream typesystem issues.
 impl Clone for RedirectPolicy {
     fn clone(&self) -> RedirectPolicy {
-        *self 
+        *self
     }
 }
 
@@ -336,24 +439,26 @@ impl Default for RedirectPolicy {
     }
 }
 
-fn get_host_and_port(url: &Url) -> HttpResult<(String, u16)> {
+fn get_host_and_port(url: &Url) -> ::Result<(String, u16)> {
     let host = match url.serialize_host() {
         Some(host) => host,
-        None => return Err(HttpUriError(UrlError::EmptyHost))
+        None => return Err(Error::Uri(UrlError::EmptyHost))
     };
-    debug!("host={:?}", host);
+    trace!("host={:?}", host);
     let port = match url.port_or_default() {
         Some(port) => port,
-        None => return Err(HttpUriError(UrlError::InvalidPort))
+        None => return Err(Error::Uri(UrlError::InvalidPort))
     };
-    debug!("port={:?}", port);
+    trace!("port={:?}", port);
     Ok((host, port))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use header::Server;
     use super::{Client, RedirectPolicy};
+    use super::pool::Pool;
     use url::Url;
 
     mock_connector!(MockRedirectPolicy {
@@ -379,7 +484,7 @@ mod tests {
         client.set_redirect_policy(RedirectPolicy::FollowAll);
 
         let res = client.get("http://127.0.0.1").send().unwrap();
-        assert_eq!(res.headers.get(), Some(&Server("mock3".to_string())));
+        assert_eq!(res.headers.get(), Some(&Server("mock3".to_owned())));
     }
 
     #[test]
@@ -387,7 +492,7 @@ mod tests {
         let mut client = Client::with_connector(MockRedirectPolicy);
         client.set_redirect_policy(RedirectPolicy::FollowNone);
         let res = client.get("http://127.0.0.1").send().unwrap();
-        assert_eq!(res.headers.get(), Some(&Server("mock1".to_string())));
+        assert_eq!(res.headers.get(), Some(&Server("mock1".to_owned())));
     }
 
     #[test]
@@ -398,7 +503,33 @@ mod tests {
         let mut client = Client::with_connector(MockRedirectPolicy);
         client.set_redirect_policy(RedirectPolicy::FollowIf(follow_if));
         let res = client.get("http://127.0.0.1").send().unwrap();
-        assert_eq!(res.headers.get(), Some(&Server("mock2".to_string())));
+        assert_eq!(res.headers.get(), Some(&Server("mock2".to_owned())));
     }
 
+    mock_connector!(Issue640Connector {
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n",
+        b"GET",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
+        b"HEAD",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n",
+        b"POST"
+    });
+
+    // see issue #640
+    #[test]
+    fn test_head_response_body_keep_alive() {
+        let client = Client::with_connector(Pool::with_connector(Default::default(), Issue640Connector));
+
+        let mut s = String::new();
+        client.get("http://127.0.0.1").send().unwrap().read_to_string(&mut s).unwrap();
+        assert_eq!(s, "GET");
+
+        let mut s = String::new();
+        client.head("http://127.0.0.1").send().unwrap().read_to_string(&mut s).unwrap();
+        assert_eq!(s, "");
+
+        let mut s = String::new();
+        client.post("http://127.0.0.1").send().unwrap().read_to_string(&mut s).unwrap();
+        assert_eq!(s, "POST");
+    }
 }

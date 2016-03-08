@@ -97,14 +97,14 @@ impl Charset {
 }
 
 impl Display for Charset {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        write!(fmt, "{}", self.name())
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
 impl FromStr for Charset {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Charset, ()> {
+    type Err = ::Error;
+    fn from_str(s: &str) -> ::Result<Charset> {
         Ok(match s.to_ascii_uppercase().as_ref() {
             "US-ASCII" => Us_Ascii,
             "ISO-8859-1" => Iso_8859_1,
@@ -130,7 +130,7 @@ impl FromStr for Charset {
             "GB2312" => Gb2312,
             "5" => Big5,
             "KOI8-R" => Koi8_R,
-            s => Ext(s.to_string())
+            s => Ext(s.to_owned())
         })
     }
 }
@@ -141,11 +141,11 @@ fn test_parse() {
     assert_eq!(Us_Ascii,"US-Ascii".parse().unwrap());
     assert_eq!(Us_Ascii,"US-ASCII".parse().unwrap());
     assert_eq!(Shift_Jis,"Shift-JIS".parse().unwrap());
-    assert_eq!(Ext("ABCD".to_string()),"abcd".parse().unwrap());
+    assert_eq!(Ext("ABCD".to_owned()),"abcd".parse().unwrap());
 }
 
 #[test]
 fn test_display() {
     assert_eq!("US-ASCII", format!("{}", Us_Ascii));
-    assert_eq!("ABCD", format!("{}", Ext("ABCD".to_string())));
+    assert_eq!("ABCD", format!("{}", Ext("ABCD".to_owned())));
 }

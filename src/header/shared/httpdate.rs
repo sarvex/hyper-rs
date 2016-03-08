@@ -31,27 +31,22 @@ use time;
 pub struct HttpDate(pub time::Tm);
 
 impl FromStr for HttpDate {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, ()> {
+    type Err = ::Error;
+    fn from_str(s: &str) -> ::Result<HttpDate> {
         match time::strptime(s, "%a, %d %b %Y %T %Z").or_else(|_| {
             time::strptime(s, "%A, %d-%b-%y %T %Z")
             }).or_else(|_| {
                 time::strptime(s, "%c")
                 }) {
                     Ok(t) => Ok(HttpDate(t)),
-                    Err(_) => Err(()),
+                    Err(_) => Err(::Error::Header),
                     }
     }
 }
 
 impl Display for HttpDate {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let tm = self.0;
-        let tm = match tm.tm_utcoff {
-            0 => tm,
-            _ => tm.to_utc(),
-        };
-        fmt::Display::fmt(&tm.rfc822(), f)
+        fmt::Display::fmt(&self.0.to_utc().rfc822(), f)
     }
 }
 
@@ -76,16 +71,21 @@ mod tests {
 
     #[test]
     fn test_imf_fixdate() {
-        assert_eq!("Sun, 07 Nov 1994 08:48:37 GMT".parse(), Ok(NOV_07));
+        assert_eq!("Sun, 07 Nov 1994 08:48:37 GMT".parse::<HttpDate>().unwrap(), NOV_07);
     }
 
     #[test]
     fn test_rfc_850() {
-        assert_eq!("Sunday, 07-Nov-94 08:48:37 GMT".parse(), Ok(NOV_07));
+        assert_eq!("Sunday, 07-Nov-94 08:48:37 GMT".parse::<HttpDate>().unwrap(), NOV_07);
     }
 
     #[test]
     fn test_asctime() {
-        assert_eq!("Sun Nov  7 08:48:37 1994".parse(), Ok(NOV_07));
+        assert_eq!("Sun Nov  7 08:48:37 1994".parse::<HttpDate>().unwrap(), NOV_07);
+    }
+
+    #[test]
+    fn test_no_date() {
+        assert!("this-is-no-date".parse::<HttpDate>().is_err());
     }
 }

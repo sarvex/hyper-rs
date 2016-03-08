@@ -3,33 +3,73 @@ use std::str::FromStr;
 use header::{Header, HeaderFormat};
 use header::parsing::{from_one_comma_delimited, fmt_comma_delimited};
 
-/// The Cache-Control header.
+/// `Cache-Control` header, defined in [RFC7234](https://tools.ietf.org/html/rfc7234#section-5.2)
+///
+/// The `Cache-Control` header field is used to specify directives for
+/// caches along the request/response chain.  Such cache directives are
+/// unidirectional in that the presence of a directive in a request does
+/// not imply that the same directive is to be given in the response.
+///
+/// # ABNF
+/// ```plain
+/// Cache-Control   = 1#cache-directive
+/// cache-directive = token [ "=" ( token / quoted-string ) ]
+/// ```
+///
+/// # Example values
+/// * `no-cache`
+/// * `private, community="UCI"`
+/// * `max-age=30`
+///
+/// # Examples
+/// ```
+/// use hyper::header::{Headers, CacheControl, CacheDirective};
+///
+/// let mut headers = Headers::new();
+/// headers.set(
+///     CacheControl(vec![CacheDirective::MaxAge(86400u32)])
+/// );
+/// ```
+/// ```
+/// use hyper::header::{Headers, CacheControl, CacheDirective};
+///
+/// let mut headers = Headers::new();
+/// headers.set(
+///     CacheControl(vec![
+///         CacheDirective::NoCache,
+///         CacheDirective::Private,
+///         CacheDirective::MaxAge(360u32),
+///         CacheDirective::Extension("foo".to_owned(),
+///                                   Some("bar".to_owned())),
+///     ])
+/// );
+/// ```
 #[derive(PartialEq, Clone, Debug)]
 pub struct CacheControl(pub Vec<CacheDirective>);
 
-deref!(CacheControl => Vec<CacheDirective>);
+__hyper__deref!(CacheControl => Vec<CacheDirective>);
 
 impl Header for CacheControl {
     fn header_name() -> &'static str {
         "Cache-Control"
     }
 
-    fn parse_header(raw: &[Vec<u8>]) -> Option<CacheControl> {
+    fn parse_header(raw: &[Vec<u8>]) -> ::Result<CacheControl> {
         let directives = raw.iter()
-            .filter_map(|line| from_one_comma_delimited(&line[..]))
+            .filter_map(|line| from_one_comma_delimited(&line[..]).ok())
             .collect::<Vec<Vec<CacheDirective>>>()
             .concat();
-        if directives.len() > 0 {
-            Some(CacheControl(directives))
+        if !directives.is_empty() {
+            Ok(CacheControl(directives))
         } else {
-            None
+            Err(::Error::Header)
         }
     }
 }
 
 impl HeaderFormat for CacheControl {
-    fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt_comma_delimited(fmt, &self[..])
+    fn fmt_header(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fmt_comma_delimited(f, &self[..])
     }
 }
 
@@ -110,15 +150,15 @@ impl FromStr for CacheDirective {
             "proxy-revalidate" => Ok(ProxyRevalidate),
             "" => Err(None),
             _ => match s.find('=') {
-                Some(idx) if idx+1 < s.len() => match (&s[..idx], &s[idx+1..].trim_matches('"')) {
-                    ("max-age" , secs) => secs.parse().map(MaxAge).map_err(|x| Some(x)),
-                    ("max-stale", secs) => secs.parse().map(MaxStale).map_err(|x| Some(x)),
-                    ("min-fresh", secs) => secs.parse().map(MinFresh).map_err(|x| Some(x)),
-                    ("s-maxage", secs) => secs.parse().map(SMaxAge).map_err(|x| Some(x)),
-                    (left, right) => Ok(Extension(left.to_string(), Some(right.to_string())))
+                Some(idx) if idx+1 < s.len() => match (&s[..idx], (&s[idx+1..]).trim_matches('"')) {
+                    ("max-age" , secs) => secs.parse().map(MaxAge).map_err(Some),
+                    ("max-stale", secs) => secs.parse().map(MaxStale).map_err(Some),
+                    ("min-fresh", secs) => secs.parse().map(MinFresh).map_err(Some),
+                    ("s-maxage", secs) => secs.parse().map(SMaxAge).map_err(Some),
+                    (left, right) => Ok(Extension(left.to_owned(), Some(right.to_owned())))
                 },
                 Some(_) => Err(None),
-                None => Ok(Extension(s.to_string(), None))
+                None => Ok(Extension(s.to_owned(), None))
             }
         }
     }
@@ -132,35 +172,37 @@ mod tests {
     #[test]
     fn test_parse_multiple_headers() {
         let cache = Header::parse_header(&[b"no-cache".to_vec(), b"private".to_vec()]);
-        assert_eq!(cache, Some(CacheControl(vec![CacheDirective::NoCache,
+        assert_eq!(cache.ok(), Some(CacheControl(vec![CacheDirective::NoCache,
                                                  CacheDirective::Private])))
     }
 
     #[test]
     fn test_parse_argument() {
         let cache = Header::parse_header(&[b"max-age=100, private".to_vec()]);
-        assert_eq!(cache, Some(CacheControl(vec![CacheDirective::MaxAge(100),
+        assert_eq!(cache.ok(), Some(CacheControl(vec![CacheDirective::MaxAge(100),
                                                  CacheDirective::Private])))
     }
 
     #[test]
     fn test_parse_quote_form() {
         let cache = Header::parse_header(&[b"max-age=\"200\"".to_vec()]);
-        assert_eq!(cache, Some(CacheControl(vec![CacheDirective::MaxAge(200)])))
+        assert_eq!(cache.ok(), Some(CacheControl(vec![CacheDirective::MaxAge(200)])))
     }
 
     #[test]
     fn test_parse_extension() {
         let cache = Header::parse_header(&[b"foo, bar=baz".to_vec()]);
-        assert_eq!(cache, Some(CacheControl(vec![CacheDirective::Extension("foo".to_string(), None),
-                                                 CacheDirective::Extension("bar".to_string(), Some("baz".to_string()))])))
+        assert_eq!(cache.ok(), Some(CacheControl(vec![
+            CacheDirective::Extension("foo".to_owned(), None),
+            CacheDirective::Extension("bar".to_owned(), Some("baz".to_owned()))])))
     }
 
     #[test]
     fn test_parse_bad_syntax() {
-        let cache: Option<CacheControl> = Header::parse_header(&[b"foo=".to_vec()]);
-        assert_eq!(cache, None)
+        let cache: ::Result<CacheControl> = Header::parse_header(&[b"foo=".to_vec()]);
+        assert_eq!(cache.ok(), None)
     }
 }
 
-bench_header!(normal, CacheControl, { vec![b"no-cache, private".to_vec(), b"max-age=100".to_vec()] });
+bench_header!(normal,
+    CacheControl, { vec![b"no-cache, private".to_vec(), b"max-age=100".to_vec()] });

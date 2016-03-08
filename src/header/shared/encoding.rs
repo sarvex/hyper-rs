@@ -1,5 +1,3 @@
-//! Provides an Encoding enum.
-
 use std::fmt;
 use std::str;
 
@@ -24,8 +22,8 @@ pub enum Encoding {
 }
 
 impl fmt::Display for Encoding {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(match *self {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match *self {
             Chunked => "chunked",
             Gzip => "gzip",
             Deflate => "deflate",
@@ -37,15 +35,15 @@ impl fmt::Display for Encoding {
 }
 
 impl str::FromStr for Encoding {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Encoding, ()> {
+    type Err = ::Error;
+    fn from_str(s: &str) -> ::Result<Encoding> {
         match s {
             "chunked" => Ok(Chunked),
             "deflate" => Ok(Deflate),
             "gzip" => Ok(Gzip),
             "compress" => Ok(Compress),
             "identity" => Ok(Identity),
-            _ => Ok(EncodingExt(s.to_string()))
+            _ => Ok(EncodingExt(s.to_owned()))
         }
     }
 }

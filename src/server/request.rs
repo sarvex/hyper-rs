@@ -4,15 +4,15 @@
 //! target URI, headers, and message body.
 use std::io::{self, Read};
 use std::net::SocketAddr;
+use std::time::Duration;
 
-use {HttpResult};
 use buffer::BufReader;
 use net::NetworkStream;
 use version::{HttpVersion};
-use method::Method::{self, Get, Head};
+use method::Method;
 use header::{Headers, ContentLength, TransferEncoding};
-use http::{self, Incoming, HttpReader};
-use http::HttpReader::{SizedReader, ChunkedReader, EmptyReader};
+use http::h1::{self, Incoming, HttpReader};
+use http::h1::HttpReader::{SizedReader, ChunkedReader, EmptyReader};
 use uri::RequestUri;
 
 /// A request bundles several parts of an incoming `NetworkStream`, given to a `Handler`.
@@ -35,15 +35,13 @@ impl<'a, 'b: 'a> Request<'a, 'b> {
     /// Create a new Request, reading the StartLine and Headers so they are
     /// immediately useful.
     pub fn new(mut stream: &'a mut BufReader<&'b mut NetworkStream>, addr: SocketAddr)
-        -> HttpResult<Request<'a, 'b>> {
+        -> ::Result<Request<'a, 'b>> {
 
-        let Incoming { version, subject: (method, uri), headers } = try!(http::parse_request(stream));
+        let Incoming { version, subject: (method, uri), headers } = try!(h1::parse_request(stream));
         debug!("Request Line: {:?} {:?} {:?}", method, uri, version);
         debug!("{:?}", headers);
 
-        let body = if method == Get || method == Head {
-            EmptyReader(stream)
-        } else if headers.has::<ContentLength>() {
+        let body = if headers.has::<ContentLength>() {
             match headers.get::<ContentLength>() {
                 Some(&ContentLength(len)) => SizedReader(stream, len),
                 None => unreachable!()
@@ -65,7 +63,47 @@ impl<'a, 'b: 'a> Request<'a, 'b> {
         })
     }
 
+    /// Set the read timeout of the underlying NetworkStream.
+    #[inline]
+    pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.body.get_ref().get_ref().set_read_timeout(timeout)
+    }
+
+    /// Get a reference to the underlying `NetworkStream`.
+    #[inline]
+    pub fn downcast_ref<T: NetworkStream>(&self) -> Option<&T> {
+        self.body.get_ref().get_ref().downcast_ref()
+    }
+
+    /// Get a reference to the underlying Ssl stream, if connected
+    /// over HTTPS.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # extern crate hyper;
+    /// # #[cfg(feature = "openssl")]
+    /// extern crate openssl;
+    /// # #[cfg(feature = "openssl")]
+    /// use openssl::ssl::SslStream;
+    /// use hyper::net::HttpStream;
+    /// # fn main() {}
+    /// # #[cfg(feature = "openssl")]
+    /// # fn doc_ssl(req: hyper::server::Request) {
+    /// let maybe_ssl = req.ssl::<SslStream<HttpStream>>();
+    /// # }
+    /// ```
+    #[inline]
+    pub fn ssl<T: NetworkStream>(&self) -> Option<&T> {
+        use ::net::HttpsStream;
+        match self.downcast_ref() {
+            Some(&HttpsStream::Https(ref s)) => Some(s),
+            _ => None
+        }
+    }
+
     /// Deconstruct a Request into its constituent parts.
+    #[inline]
     pub fn deconstruct(self) -> (SocketAddr, Method, Headers,
                                  RequestUri, HttpVersion,
                                  HttpReader<&'a mut BufReader<&'b mut NetworkStream>>) {
@@ -75,6 +113,7 @@ impl<'a, 'b: 'a> Request<'a, 'b> {
 }
 
 impl<'a, 'b> Read for Request<'a, 'b> {
+    #[inline]
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.body.read(buf)
     }
@@ -115,7 +154,25 @@ mod tests {
         let mut stream = BufReader::new(mock);
 
         let req = Request::new(&mut stream, sock("127.0.0.1:80")).unwrap();
-        assert_eq!(read_to_string(req).unwrap(), "".to_string());
+        assert_eq!(read_to_string(req).unwrap(), "".to_owned());
+    }
+
+    #[test]
+    fn test_get_with_body() {
+        let mut mock = MockStream::with_input(b"\
+            GET / HTTP/1.1\r\n\
+            Host: example.domain\r\n\
+            Content-Length: 19\r\n\
+            \r\n\
+            I'm a good request.\r\n\
+        ");
+
+        // FIXME: Use Type ascription
+        let mock: &mut NetworkStream = &mut mock;
+        let mut stream = BufReader::new(mock);
+
+        let req = Request::new(&mut stream, sock("127.0.0.1:80")).unwrap();
+        assert_eq!(read_to_string(req).unwrap(), "I'm a good request.".to_owned());
     }
 
     #[test]
@@ -132,7 +189,7 @@ mod tests {
         let mut stream = BufReader::new(mock);
 
         let req = Request::new(&mut stream, sock("127.0.0.1:80")).unwrap();
-        assert_eq!(read_to_string(req).unwrap(), "".to_string());
+        assert_eq!(read_to_string(req).unwrap(), "".to_owned());
     }
 
     #[test]
@@ -149,7 +206,7 @@ mod tests {
         let mut stream = BufReader::new(mock);
 
         let req = Request::new(&mut stream, sock("127.0.0.1:80")).unwrap();
-        assert_eq!(read_to_string(req).unwrap(), "".to_string());
+        assert_eq!(read_to_string(req).unwrap(), "".to_owned());
     }
 
     #[test]
@@ -190,7 +247,7 @@ mod tests {
             None => panic!("Transfer-Encoding: chunked expected!"),
         };
         // The content is correctly read?
-        assert_eq!(read_to_string(req).unwrap(), "qwert".to_string());
+        assert_eq!(read_to_string(req).unwrap(), "qwert".to_owned());
     }
 
     /// Tests that when a chunk size is not a valid radix-16 number, an error
@@ -262,7 +319,7 @@ mod tests {
 
         let req = Request::new(&mut stream, sock("127.0.0.1:80")).unwrap();
 
-        assert_eq!(read_to_string(req).unwrap(), "1".to_string());
+        assert_eq!(read_to_string(req).unwrap(), "1".to_owned());
     }
 
 }

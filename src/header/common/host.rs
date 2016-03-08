@@ -9,6 +9,30 @@ use header::parsing::from_one_raw_str;
 ///
 /// Currently is just a String, but it should probably become a better type,
 /// like url::Host or something.
+///
+/// # Examples
+/// ```
+/// use hyper::header::{Headers, Host};
+///
+/// let mut headers = Headers::new();
+/// headers.set(
+///     Host{
+///         hostname: "hyper.rs".to_owned(),
+///         port: None,
+///     }
+/// );
+/// ```
+/// ```
+/// use hyper::header::{Headers, Host};
+///
+/// let mut headers = Headers::new();
+/// headers.set(
+///     Host{
+///         hostname: "hyper.rs".to_owned(),
+///         port: Some(8080),
+///     }
+/// );
+/// ```
 #[derive(Clone, PartialEq, Debug)]
 pub struct Host {
     /// The hostname, such a example.domain.
@@ -22,7 +46,7 @@ impl Header for Host {
         "Host"
     }
 
-    fn parse_header(raw: &[Vec<u8>]) -> Option<Host> {
+    fn parse_header(raw: &[Vec<u8>]) -> ::Result<Host> {
         from_one_raw_str(raw).and_then(|mut s: String| {
             // FIXME: use rust-url to parse this
             // https://github.com/servo/rust-url/issues/42
@@ -39,7 +63,7 @@ impl Header for Host {
                                 None
                             }
                         }
-                        None => return None // this is a bad ipv6 address...
+                        None => return Err(::Error::Header) // this is a bad ipv6 address...
                     }
                 } else {
                     slice.rfind(':')
@@ -56,7 +80,7 @@ impl Header for Host {
                 None => ()
             }
 
-            Some(Host {
+            Ok(Host {
                 hostname: s,
                 port: port
             })
@@ -65,10 +89,10 @@ impl Header for Host {
 }
 
 impl HeaderFormat for Host {
-    fn fmt_header(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt_header(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self.port {
-            None | Some(80) | Some(443) => write!(fmt, "{}", self.hostname),
-            Some(port) => write!(fmt, "{}:{}", self.hostname, port)
+            None | Some(80) | Some(443) => f.write_str(&self.hostname[..]),
+            Some(port) => write!(f, "{}:{}", self.hostname, port)
         }
     }
 }
@@ -82,19 +106,18 @@ mod tests {
     #[test]
     fn test_host() {
         let host = Header::parse_header([b"foo.com".to_vec()].as_ref());
-        assert_eq!(host, Some(Host {
-            hostname: "foo.com".to_string(),
+        assert_eq!(host.ok(), Some(Host {
+            hostname: "foo.com".to_owned(),
             port: None
         }));
 
 
         let host = Header::parse_header([b"foo.com:8080".to_vec()].as_ref());
-        assert_eq!(host, Some(Host {
-            hostname: "foo.com".to_string(),
+        assert_eq!(host.ok(), Some(Host {
+            hostname: "foo.com".to_owned(),
             port: Some(8080)
         }));
     }
 }
 
 bench_header!(bench, Host, { vec![b"foo.com:3000".to_vec()] });
-
