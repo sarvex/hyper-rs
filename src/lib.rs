@@ -1,214 +1,99 @@
-#![doc(html_root_url = "https://hyperium.github.io/hyper/")]
-#![cfg_attr(test, deny(missing_docs))]
-#![cfg_attr(test, deny(warnings))]
+#![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
+#![cfg_attr(test, deny(rust_2018_idioms))]
+#![cfg_attr(all(test, feature = "full"), deny(unreachable_pub))]
+#![cfg_attr(all(test, feature = "full"), deny(warnings))]
 #![cfg_attr(all(test, feature = "nightly"), feature(test))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! # Hyper
+//! # hyper
 //!
-//! Hyper is a fast, modern HTTP implementation written in and for Rust. It
-//! is a low-level typesafe abstraction over raw HTTP, providing an elegant
-//! layer over "stringly-typed" HTTP.
+//! hyper is a **fast** and **correct** HTTP implementation written in and for Rust.
 //!
-//! Hyper offers both a [Client](client/index.html) and a
-//! [Server](server/index.html) which can be used to drive complex web
-//! applications written entirely in Rust.
+//! ## Features
 //!
-//! ## Internal Design
+//! - HTTP/1 and HTTP/2
+//! - Asynchronous design
+//! - Leading in performance
+//! - Tested and **correct**
+//! - Extensive production use
+//! - [Client](client/index.html) and [Server](server/index.html) APIs
 //!
-//! Hyper is designed as a relatively low-level wrapper over raw HTTP. It should
-//! allow the implementation of higher-level abstractions with as little pain as
-//! possible, and should not irrevocably hide any information from its users.
+//! If just starting out, **check out the [Guides](https://hyper.rs/guides)
+//! first.**
 //!
-//! ### Common Functionality
+//! ## "Low-level"
 //!
-//! Functionality and code shared between the Server and Client implementations
-//! can be found in `src` directly - this includes `NetworkStream`s, `Method`s,
-//! `StatusCode`, and so on.
+//! hyper is a lower-level HTTP library, meant to be a building block
+//! for libraries and applications.
 //!
-//! #### Methods
+//! If looking for just a convenient HTTP client, consider the
+//! [reqwest](https://crates.io/crates/reqwest) crate.
 //!
-//! Methods are represented as a single `enum` to remain as simple as possible.
-//! Extension Methods are represented as raw `String`s. A method's safety and
-//! idempotence can be accessed using the `safe` and `idempotent` methods.
+//! # Optional Features
 //!
-//! #### StatusCode
+//! hyper uses a set of [feature flags] to reduce the amount of compiled code.
+//! It is possible to just enable certain features over others. By default,
+//! hyper does not enable any features but allows one to enable a subset for
+//! their use case. Below is a list of the available feature flags. You may
+//! also notice above each function, struct and trait there is listed one or
+//! more feature flags that are required for that item to be used.
 //!
-//! Status codes are also represented as a single, exhaustive, `enum`. This
-//! representation is efficient, typesafe, and ergonomic as it allows the use of
-//! `match` to disambiguate known status codes.
+//! If you are new to hyper it is possible to enable the `full` feature flag
+//! which will enable all public APIs. Beware though that this will pull in
+//! many extra dependencies that you may not need.
 //!
-//! #### Headers
+//! The following optional features are available:
 //!
-//! Hyper's [header](header/index.html) representation is likely the most
-//! complex API exposed by Hyper.
+//! - `http1`: Enables HTTP/1 support.
+//! - `http2`: Enables HTTP/2 support.
+//! - `client`: Enables the HTTP `client`.
+//! - `server`: Enables the HTTP `server`.
 //!
-//! Hyper's headers are an abstraction over an internal `HashMap` and provides a
-//! typesafe API for interacting with headers that does not rely on the use of
-//! "string-typing."
-//!
-//! Each HTTP header in Hyper has an associated type and implementation of the
-//! `Header` trait, which defines an HTTP headers name as a string, how to parse
-//! that header, and how to format that header.
-//!
-//! Headers are then parsed from the string representation lazily when the typed
-//! representation of a header is requested and formatted back into their string
-//! representation when headers are written back to the client.
-//!
-//! #### NetworkStream and NetworkAcceptor
-//!
-//! These are found in `src/net.rs` and define the interface that acceptors and
-//! streams must fulfill for them to be used within Hyper. They are by and large
-//! internal tools and you should only need to mess around with them if you want to
-//! mock or replace `TcpStream` and `TcpAcceptor`.
-//!
-//! ### Server
-//!
-//! Server-specific functionality, such as `Request` and `Response`
-//! representations, are found in in `src/server`.
-//!
-//! #### Handler + Server
-//!
-//! A `Handler` in Hyper accepts a `Request` and `Response`. This is where
-//! user-code can handle each connection. The server accepts connections in a
-//! task pool with a customizable number of threads, and passes the Request /
-//! Response to the handler.
-//!
-//! #### Request
-//!
-//! An incoming HTTP Request is represented as a struct containing
-//! a `Reader` over a `NetworkStream`, which represents the body, headers, a remote
-//! address, an HTTP version, and a `Method` - relatively standard stuff.
-//!
-//! `Request` implements `Reader` itself, meaning that you can ergonomically get
-//! the body out of a `Request` using standard `Reader` methods and helpers.
-//!
-//! #### Response
-//!
-//! An outgoing HTTP Response is also represented as a struct containing a `Writer`
-//! over a `NetworkStream` which represents the Response body in addition to
-//! standard items such as the `StatusCode` and HTTP version. `Response`'s `Writer`
-//! implementation provides a streaming interface for sending data over to the
-//! client.
-//!
-//! One of the traditional problems with representing outgoing HTTP Responses is
-//! tracking the write-status of the Response - have we written the status-line,
-//! the headers, the body, etc.? Hyper tracks this information statically using the
-//! type system and prevents you, using the type system, from writing headers after
-//! you have started writing to the body or vice versa.
-//!
-//! Hyper does this through a phantom type parameter in the definition of Response,
-//! which tracks whether you are allowed to write to the headers or the body. This
-//! phantom type can have two values `Fresh` or `Streaming`, with `Fresh`
-//! indicating that you can write the headers and `Streaming` indicating that you
-//! may write to the body, but not the headers.
-//!
-//! ### Client
-//!
-//! Client-specific functionality, such as `Request` and `Response`
-//! representations, are found in `src/client`.
-//!
-//! #### Request
-//!
-//! An outgoing HTTP Request is represented as a struct containing a `Writer` over
-//! a `NetworkStream` which represents the Request body in addition to the standard
-//! information such as headers and the request method.
-//!
-//! Outgoing Requests track their write-status in almost exactly the same way as
-//! outgoing HTTP Responses do on the Server, so we will defer to the explanation
-//! in the documentation for server Response.
-//!
-//! Requests expose an efficient streaming interface instead of a builder pattern,
-//! but they also provide the needed interface for creating a builder pattern over
-//! the API exposed by core Hyper.
-//!
-//! #### Response
-//!
-//! Incoming HTTP Responses are represented as a struct containing a `Reader` over
-//! a `NetworkStream` and contain headers, a status, and an http version. They
-//! implement `Reader` and can be read to get the data out of a `Response`.
-//!
+//! [feature flags]: https://doc.rust-lang.org/cargo/reference/manifest.html#the-features-section
 
-extern crate rustc_serialize as serialize;
-extern crate time;
-extern crate url;
-#[cfg(feature = "openssl")]
-extern crate openssl;
-#[cfg(feature = "serde-serialization")]
-extern crate serde;
-extern crate cookie;
-extern crate unicase;
-extern crate httparse;
-extern crate num_cpus;
-extern crate traitobject;
-extern crate typeable;
-extern crate solicit;
-
-#[macro_use]
-extern crate language_tags;
-
-#[macro_use]
-extern crate mime as mime_crate;
-
-#[macro_use]
-extern crate log;
+#[doc(hidden)]
+pub use http;
 
 #[cfg(all(test, feature = "nightly"))]
 extern crate test;
 
+pub use crate::http::{header, Method, Request, Response, StatusCode, Uri, Version};
 
-pub use url::Url;
-pub use client::Client;
-pub use error::{Result, Error};
-pub use method::Method::{Get, Head, Post, Delete};
-pub use status::StatusCode::{Ok, BadRequest, NotFound};
-pub use server::Server;
-pub use language_tags::LanguageTag;
+#[doc(no_inline)]
+pub use crate::http::HeaderMap;
 
-macro_rules! todo(
-    ($($arg:tt)*) => (if cfg!(not(ndebug)) {
-        trace!("TODO: {:?}", format_args!($($arg)*))
-    })
-);
+pub use crate::error::{Error, Result};
 
-macro_rules! inspect(
-    ($name:expr, $value:expr) => ({
-        let v = $value;
-        trace!("inspect: {:?} = {:?}", $name, v);
-        v
-    })
-);
-
-#[cfg(test)]
 #[macro_use]
+mod cfg;
+#[macro_use]
+mod common;
+pub mod body;
+mod error;
+pub mod ext;
+#[cfg(test)]
 mod mock;
-#[doc(hidden)]
-pub mod buffer;
-pub mod client;
-pub mod error;
-pub mod method;
-pub mod header;
-pub mod http;
-pub mod net;
-pub mod server;
-pub mod status;
-pub mod uri;
-pub mod version;
+pub mod rt;
+pub mod service;
+pub mod upgrade;
 
-/// Re-exporting the mime crate, for convenience.
-pub mod mime {
-    pub use mime_crate::*;
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+cfg_proto! {
+    mod headers;
+    mod proto;
 }
 
-#[allow(unconditional_recursion)]
-fn _assert_send<T: Send>() {
-    _assert_send::<Client>();
-    _assert_send::<client::Request<net::Fresh>>();
-    _assert_send::<client::Response>();
-    _assert_send::<error::Error>();
+cfg_feature! {
+    #![feature = "client"]
+
+    pub mod client;
 }
 
-#[allow(unconditional_recursion)]
-fn _assert_sync<T: Sync>() {
-    _assert_sync::<Client>();
-    _assert_sync::<error::Error>();
+cfg_feature! {
+    #![feature = "server"]
+
+    pub mod server;
 }

@@ -1,72 +1,45 @@
-# hyper
+# [hyper](https://hyper.rs)
 
-[![Travis Build Status](https://travis-ci.org/hyperium/hyper.svg?branch=master)](https://travis-ci.org/hyperium/hyper)
-[![Appveyor Build status](https://ci.appveyor.com/api/projects/status/tb0n55fjs5tohdfo/branch/master?svg=true)](https://ci.appveyor.com/project/seanmonstar/hyper)
-[![Coverage Status](https://coveralls.io/repos/hyperium/hyper/badge.svg?branch=master)](https://coveralls.io/r/hyperium/hyper?branch=master)
+[![crates.io](https://img.shields.io/crates/v/hyper.svg)](https://crates.io/crates/hyper)
+[![Released API docs](https://docs.rs/hyper/badge.svg)](https://docs.rs/hyper)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![crates.io](http://meritbadge.herokuapp.com/hyper)](https://crates.io/crates/hyper)
+[![CI](https://github.com/hyperium/hyper/workflows/CI/badge.svg)](https://github.com/hyperium/hyper/actions?query=workflow%3ACI)
+[![Discord chat][discord-badge]][discord-url]
 
-A Modern HTTP library for Rust.
+A **fast** and **correct** HTTP implementation for Rust.
 
-[Documentation](http://hyperium.github.io/hyper)
+> **Note**: hyper's [master](https://github.com/hyperium/hyper) branch is
+> currently preparing breaking changes. For the most recently *released* code,
+> look to the [0.14.x branch](https://github.com/hyperium/hyper/tree/0.14.x).
 
-## Overview
+- HTTP/1 and HTTP/2
+- Asynchronous design
+- Leading in performance
+- Tested and **correct**
+- Extensive production use
+- Client and Server APIs
 
-Hyper is a fast, modern HTTP implementation written in and for Rust. It
-is a low-level typesafe abstraction over raw HTTP, providing an elegant
-layer over "stringly-typed" HTTP.
+**Get started** by looking over the [guides](https://hyper.rs/guides).
 
-Hyper offers both an HTTP/S client and HTTP server which can be used to drive
-complex web applications written entirely in Rust.
+## "Low-level"
 
-The documentation is located at [http://hyperium.github.io/hyper](http://hyperium.github.io/hyper).
+hyper is a relatively low-level library, meant to be a building block for
+libraries and applications.
 
-## Example
+If you are looking for a convenient HTTP client, then you may wish to consider
+[reqwest](https://github.com/seanmonstar/reqwest). If you are looking for a
+convenient HTTP server, then you may wish to consider [warp](https://github.com/seanmonstar/warp).
+Both are built on top of this library.
 
-### Hello World Server:
+## Contributing
 
-```rust
-extern crate hyper;
+To get involved, take a look at [CONTRIBUTING](CONTRIBUTING.md).
 
-use hyper::Server;
-use hyper::server::Request;
-use hyper::server::Response;
+If you prefer chatting, there is an active community in the [Discord server][discord-url].
 
-fn hello(_: Request, res: Response) {
-    res.send(b"Hello World!").unwrap();
-}
+## License
 
-fn main() {
-    Server::http("127.0.0.1:3000").unwrap()
-        .handle(hello).unwrap();
-}
-```
+hyper is provided under the MIT license. See [LICENSE](LICENSE).
 
-### Client:
-
-```rust
-extern crate hyper;
-
-use std::io::Read;
-
-use hyper::Client;
-use hyper::header::Connection;
-
-fn main() {
-    // Create a client.
-    let mut client = Client::new();
-
-    // Creating an outgoing request.
-    let mut res = client.get("http://rust-lang.org/")
-        // set a header
-        .header(Connection::close())
-        // let 'er go!
-        .send().unwrap();
-
-    // Read the Response.
-    let mut body = String::new();
-    res.read_to_string(&mut body).unwrap();
-
-    println!("Response: {}", body);
-}
-```
+[discord-badge]: https://img.shields.io/discord/500028886025895936.svg?logo=discord
+[discord-url]: https://discord.gg/kkwpueZ
